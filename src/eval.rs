@@ -95,6 +95,10 @@ pub struct MiriConfig {
     /// If `true` then `Unique` is reborrowed with its own new tag and permission,
     /// otherwise `Unique` is just another raw pointer.
     pub unique_is_unique: bool,
+    /// Whether `&mut`, `Box`, and `Unique` (if above option is enabled) protectors
+    /// perform write accesses (with Tree Borrows).
+    /// If `true` then they perform phantom writes, otherwise they only read.
+    pub protectors_write: bool,
     /// Controls alignment checking.
     pub check_alignment: AlignmentCheck,
     /// Controls function [ABI](Abi) checking.
@@ -162,6 +166,7 @@ impl Default for MiriConfig {
             validate: true,
             borrow_tracker: Some(BorrowTrackerMethod::StackedBorrows),
             unique_is_unique: false,
+            protectors_write: false,
             check_alignment: AlignmentCheck::Int,
             check_abi: true,
             isolated_op: IsolatedOp::Reject(RejectOpWith::Abort),

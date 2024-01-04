@@ -1,24 +1,24 @@
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Rs  |      └─┬──<TAG=base>
-| Rs  |        └─┬──<TAG=raw>
+|wAct |    └─┬──<TAG=root of the allocation>
+|rRs  |      └─┬──<TAG=base>
+|rRs  |        └─┬──<TAG=raw>
 |-----|          └────<TAG=uniq, uniq>
 ──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Act |      └─┬──<TAG=base>
-| Act |        └─┬──<TAG=raw>
-| Act |          └────<TAG=uniq, uniq>
+|wAct |    └─┬──<TAG=root of the allocation>
+|wAct |      └─┬──<TAG=base>
+|wAct |        └─┬──<TAG=raw>
+|wAct |          └────<TAG=uniq, uniq>
 ──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Act |      └─┬──<TAG=base>
-| Act |        └─┬──<TAG=raw>
-| Dis |          └────<TAG=uniq, uniq>
+|wAct |    └─┬──<TAG=root of the allocation>
+|wAct |      └─┬──<TAG=base>
+|wAct |        └─┬──<TAG=raw>
+|wDis |          └────<TAG=uniq, uniq>
 ──────────────────────────────────────────────────

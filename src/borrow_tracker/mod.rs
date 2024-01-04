@@ -110,6 +110,8 @@ pub struct GlobalStateInner {
     retag_fields: RetagFields,
     /// Whether `core::ptr::Unique` gets special (`Box`-like) handling.
     unique_is_unique: bool,
+    /// Whether `&mut`, `Box`, and `Unique` protectors perform phatom write accesses.
+    protectors_write: bool,
 }
 
 impl VisitProvenance for GlobalStateInner {
@@ -124,7 +126,7 @@ impl VisitProvenance for GlobalStateInner {
 pub type GlobalState = RefCell<GlobalStateInner>;
 
 /// Indicates which kind of access is being performed.
-#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AccessKind {
     Read,
     Write,
@@ -152,7 +154,7 @@ pub enum RetagFields {
 }
 
 /// The flavor of the protector.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ProtectorKind {
     /// Protected against aliasing violations from other pointers.
     ///
@@ -160,15 +162,41 @@ pub enum ProtectorKind {
     /// still be used to issue a deallocation.
     ///
     /// This is required for LLVM IR pointers that are `noalias` but *not* `dereferenceable`.
-    WeakProtector,
+    SharedOwn,
+
+    /// Like `SharedOwn`, but additionally allows spurious writes (and therefore forbids foreign reads).
+    /// This is strictly stronger protection than `SharedOwn`.
+    Own,
 
     /// Protected against any kind of invalidation.
     ///
     /// Items protected like this cause UB when they are invalidated or the memory is deallocated.
-    /// This is strictly stronger protection than `WeakProtector`.
+    /// This is strictly stronger protection than `SharedOwn`.
     ///
     /// This is required for LLVM IR pointers that are `dereferenceable` (and also allows `noalias`).
-    StrongProtector,
+    SharedRef,
+
+    /// Like `SharedRef`, but additionally allows spurious writes (and therefore forbids foreign reads).
+    /// This is strictly stronger protection than `SharedRef` and `Own`.
+    MutRef,
+}
+
+impl ProtectorKind {
+    /// Access kind generated when the protector is applied or removed.
+    pub fn access_kind(self) -> AccessKind {
+        match self {
+            ProtectorKind::SharedOwn | ProtectorKind::SharedRef => AccessKind::Read,
+            ProtectorKind::Own | ProtectorKind::MutRef => AccessKind::Write,
+        }
+    }
+
+    /// Whether this type of protector allows deallocation within the function.
+    pub fn allows_dealloc(self) -> bool {
+        match self {
+            ProtectorKind::SharedRef | ProtectorKind::MutRef => false,
+            ProtectorKind::SharedOwn | ProtectorKind::Own => true,
+        }
+    }
 }
 
 /// Utilities for initialization and ID generation
@@ -179,6 +207,7 @@ impl GlobalStateInner {
         tracked_call_ids: FxHashSet<CallId>,
         retag_fields: RetagFields,
         unique_is_unique: bool,
+        protectors_write: bool,
     ) -> Self {
         GlobalStateInner {
             borrow_tracker_method,
@@ -190,6 +219,7 @@ impl GlobalStateInner {
             tracked_call_ids,
             retag_fields,
             unique_is_unique,
+            protectors_write,
         }
     }
 
@@ -259,6 +289,7 @@ impl BorrowTrackerMethod {
             config.tracked_call_ids.clone(),
             config.retag_fields,
             config.unique_is_unique,
+            config.protectors_write,
         ))
     }
 }

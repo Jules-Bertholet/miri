@@ -113,8 +113,10 @@ impl<'tcx> Tree {
         tag: BorTag,
     ) -> InterpResult<'tcx> {
         let span = machine.current_span();
+        let access_kind =
+            machine.borrow_tracker.as_ref().unwrap().borrow().protected_tags[&tag].access_kind();
         self.perform_access(
-            AccessKind::Read,
+            access_kind,
             tag,
             None, // no specified range because it occurs on the entire allocation
             global,
@@ -147,6 +149,16 @@ impl<'tcx> NewPermission {
     ) -> Option<Self> {
         let ty_is_freeze = pointee.is_freeze(*cx.tcx, cx.param_env());
         let ty_is_unpin = pointee.is_unpin(*cx.tcx, cx.param_env());
+
+        let protector = (kind == RetagKind::FnEntry).then_some({
+            match mutability {
+                Mutability::Mut
+                    if cx.machine.borrow_tracker.as_ref().unwrap().borrow().protectors_write =>
+                    ProtectorKind::MutRef,
+                _ => ProtectorKind::SharedRef,
+            }
+        });
+
         let initial_state = match mutability {
             Mutability::Mut if ty_is_unpin => Permission::new_reserved(ty_is_freeze),
             Mutability::Not if ty_is_freeze => Permission::new_frozen(),
@@ -157,7 +169,6 @@ impl<'tcx> NewPermission {
             _ => return None,
         };
 
-        let protector = (kind == RetagKind::FnEntry).then_some(ProtectorKind::StrongProtector);
         Some(Self { zero_size: false, initial_state, protector })
     }
 
@@ -178,7 +189,15 @@ impl<'tcx> NewPermission {
             Self {
                 zero_size,
                 initial_state: Permission::new_reserved(ty_is_freeze),
-                protector: (kind == RetagKind::FnEntry).then_some(ProtectorKind::WeakProtector),
+                protector: if kind == RetagKind::FnEntry {
+                    if cx.machine.borrow_tracker.as_ref().unwrap().borrow().protectors_write {
+                        Some(ProtectorKind::Own)
+                    } else {
+                        Some(ProtectorKind::SharedOwn)
+                    }
+                } else {
+                    None
+                },
             }
         })
     }
@@ -262,7 +281,11 @@ trait EvalContextPrivExt<'mir: 'ecx, 'tcx: 'mir, 'ecx>: crate::MiriInterpCxExt<'
             ptr_size.bytes()
         );
 
+        let access_kind: AccessKind;
+
         if let Some(protect) = new_perm.protector {
+            access_kind = protect.access_kind();
+
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
@@ -280,6 +303,8 @@ trait EvalContextPrivExt<'mir: 'ecx, 'tcx: 'mir, 'ecx>: crate::MiriInterpCxExt<'
                 .get_mut()
                 .protected_tags
                 .insert(new_tag, protect);
+        } else {
+            access_kind = AccessKind::Read;
         }
 
         let alloc_kind = this.get_alloc_info(alloc_id).2;
@@ -296,8 +321,9 @@ trait EvalContextPrivExt<'mir: 'ecx, 'tcx: 'mir, 'ecx>: crate::MiriInterpCxExt<'
         let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
 
         // All reborrows incur a (possibly zero-sized) read access to the parent
+        // (write if mutably protected)
         tree_borrows.perform_access(
-            AccessKind::Read,
+            access_kind,
             orig_tag,
             Some(range),
             this.machine.borrow_tracker.as_ref().unwrap(),
@@ -305,7 +331,14 @@ trait EvalContextPrivExt<'mir: 'ecx, 'tcx: 'mir, 'ecx>: crate::MiriInterpCxExt<'
             diagnostics::AccessCause::Reborrow,
         )?;
         // Record the parent-child pair in the tree.
-        tree_borrows.new_child(orig_tag, new_tag, new_perm.initial_state, range, span)?;
+        tree_borrows.new_child(
+            orig_tag,
+            new_tag,
+            new_perm.initial_state,
+            range,
+            span,
+            access_kind,
+        )?;
         drop(tree_borrows);
 
         // Also inform the data race model (but only if any bytes are actually affected).
@@ -525,7 +558,13 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 place.layout.ty.is_freeze(this.tcx(), this.param_env()),
             ),
             zero_size: false,
-            protector: Some(ProtectorKind::StrongProtector),
+            protector: Some(
+                if this.machine.borrow_tracker.as_mut().unwrap().get_mut().protectors_write {
+                    ProtectorKind::MutRef
+                } else {
+                    ProtectorKind::SharedRef
+                },
+            ),
         };
         this.tb_retag_place(place, new_perm)
     }

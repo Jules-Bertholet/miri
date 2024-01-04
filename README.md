@@ -440,6 +440,9 @@ to Miri failing to detect cases of undefined behavior in a program.
 * `-Zmiri-unique-is-unique` performs additional aliasing checks for `core::ptr::Unique` to ensure
   that it could theoretically be considered `noalias`. This flag is experimental and has
   an effect only when used with `-Zmiri-tree-borrows`.
+* `-Zmiri-protectors-write` performs additional aliasing checks for `&mut` and `Box` (and `Unique`,
+  if `-Zmiri-unique-is-unique` is also enabled) function arguments to ensure that they could allow
+  spurious writes. This flag is experimental and has an effect only when used with `-Zmiri-tree-borrows`.
 
 [function ABI]: https://doc.rust-lang.org/reference/items/functions.html#extern-function-qualifier
 

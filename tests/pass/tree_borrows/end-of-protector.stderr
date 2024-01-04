@@ -1,36 +1,36 @@
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Rs  |      └─┬──<TAG=data>
-| Rs  |        └────<TAG=x>
+|wAct |    └─┬──<TAG=root of the allocation>
+|rRs  |      └─┬──<TAG=data>
+|rRs  |        └────<TAG=x>
 ──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Rs  |      └─┬──<TAG=data>
-| Rs  |        └─┬──<TAG=x>
-| Rs  |          └─┬──<TAG=caller:x>
-| Rs  |            └────<TAG=callee:x> Strongly protected
+|wAct |    └─┬──<TAG=root of the allocation>
+|rRs  |      └─┬──<TAG=data>
+|rRs  |        └─┬──<TAG=x>
+|rRs  |          └─┬──<TAG=caller:x>
+|rRs  |            └────<TAG=callee:x> Strongly protected
 ──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Rs  |      └─┬──<TAG=data>
-| Rs  |        ├─┬──<TAG=x>
-| Rs  |        │ └─┬──<TAG=caller:x>
-| Rs  |        │   └────<TAG=callee:x>
-| Rs  |        └────<TAG=y>
+|wAct |    └─┬──<TAG=root of the allocation>
+|rRs  |      └─┬──<TAG=data>
+|rRs  |        ├─┬──<TAG=x>
+|rRs  |        │ └─┬──<TAG=caller:x>
+|rRs  |        │   └────<TAG=callee:x>
+|rRs  |        └────<TAG=y>
 ──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Act |      └─┬──<TAG=data>
-| Dis |        ├─┬──<TAG=x>
-| Dis |        │ └─┬──<TAG=caller:x>
-| Dis |        │   └────<TAG=callee:x>
-| Act |        └────<TAG=y>
+|wAct |    └─┬──<TAG=root of the allocation>
+|wAct |      └─┬──<TAG=data>
+|rDis |        ├─┬──<TAG=x>
+|rDis |        │ └─┬──<TAG=caller:x>
+|rDis |        │   └────<TAG=callee:x>
+|wAct |        └────<TAG=y>
 ──────────────────────────────────────────────────

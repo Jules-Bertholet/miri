@@ -471,13 +471,16 @@ struct DisplayFmtPadding {
 /// ____
 /// ```
 struct DisplayFmtAccess {
-    /// Used when `State.initialized = true`.
-    yes: S,
-    /// Used when `State.initialized = false`.
-    /// Should have the same width as `yes`.
+    /// Used when `State.initialized = Some(AccessKind::Write)`.
+    write: S,
+    /// Used when `State.initialized = Some(AccessKind::Read)`.
+    /// Should have the same width as `write`.
+    read: S,
+    /// Used when `State.initialized = None`.
+    /// Should have the same width as `write`.
     no: S,
     /// Used when there is no `State`.
-    /// Should have the same width as `yes`.
+    /// Should have the same width as `write`.
     meh: S,
 }
 
@@ -490,13 +493,18 @@ struct DisplayFmt {
 }
 impl DisplayFmt {
     /// Print the permission with the format
-    /// ` Res`/` Re*`/` Act`/` Frz`/` Dis` for accessed locations
-    /// and `?Res`/`?Re*`/`?Act`/`?Frz`/`?Dis` for unaccessed locations.
+    /// `wAct`/`wFrz`/`wDis` for write-accessed locations,
+    /// `rRes`/`rRe*`/`rFrz`/`rDis` for read-accessed locations,
+    /// and `?Res`/`?Re*`/`?Frz`/`?Dis` for unaccessed locations.
     fn print_perm(&self, perm: Option<LocationState>) -> String {
         if let Some(perm) = perm {
             format!(
                 "{ac}{st}",
-                ac = if perm.is_initialized() { self.accessed.yes } else { self.accessed.no },
+                ac = match perm.initialization_status() {
+                    Some(AccessKind::Write) => self.accessed.write,
+                    Some(AccessKind::Read) => self.accessed.read,
+                    None => self.accessed.no,
+                },
                 st = perm.permission().short_name(),
             )
         } else {
@@ -520,8 +528,10 @@ impl DisplayFmt {
         protector
             .map(|p| {
                 match *p {
-                    ProtectorKind::WeakProtector => " Weakly protected",
-                    ProtectorKind::StrongProtector => " Strongly protected",
+                    ProtectorKind::SharedOwn => " Weakly protected",
+                    ProtectorKind::Own => " Weakly mutably protected",
+                    ProtectorKind::SharedRef => " Strongly protected",
+                    ProtectorKind::MutRef => " Strongly mutably protected",
                 }
             })
             .unwrap_or("")
@@ -654,7 +664,7 @@ impl DisplayRepr {
                 let l = s.chars().count() + fmt.perm.range_sep.chars().count();
                 {
                     let target_len =
-                        fmt.perm.uninit.chars().count() + fmt.accessed.yes.chars().count() + 1;
+                        fmt.perm.uninit.chars().count() + fmt.accessed.write.chars().count() + 1;
                     let tot_len = target_len.max(l);
                     let header_top_pad_len = target_len.saturating_sub(l);
                     let body_pad_len = tot_len.saturating_sub(target_len);
@@ -769,7 +779,7 @@ const DEFAULT_FORMATTER: DisplayFmt = DisplayFmt {
         join_haschild: "┬",
         join_default: "─",
     },
-    accessed: DisplayFmtAccess { yes: " ", no: "?", meh: "-" },
+    accessed: DisplayFmtAccess { write: "w", read: "r", no: "?", meh: "-" },
 };
 
 impl<'tcx> Tree {

@@ -400,6 +400,8 @@ fn main() {
             miri_config.borrow_tracker = Some(BorrowTrackerMethod::TreeBorrows);
         } else if arg == "-Zmiri-unique-is-unique" {
             miri_config.unique_is_unique = true;
+        } else if arg == "-Zmiri-protectors-write" {
+            miri_config.protectors_write = true;
         } else if arg == "-Zmiri-disable-data-race-detector" {
             miri_config.data_race_detector = false;
             miri_config.weak_memory_emulation = false;

@@ -430,8 +430,10 @@ impl<'history, 'ecx, 'mir, 'tcx> DiagnosticCx<'history, 'ecx, 'mir, 'tcx> {
     #[inline(never)] // This is only called on fatal code paths
     pub(super) fn protector_error(&self, item: &Item, kind: ProtectorKind) -> InterpError<'tcx> {
         let protected = match kind {
-            ProtectorKind::WeakProtector => "weakly protected",
-            ProtectorKind::StrongProtector => "strongly protected",
+            ProtectorKind::SharedOwn => "weakly protected",
+            ProtectorKind::SharedRef => "strongly protected",
+            ProtectorKind::MutRef | ProtectorKind::Own =>
+                unreachable!("Stacked Borrows does not use mut protectors"),
         };
         let item_tag = item.tag();
         let call_id = self

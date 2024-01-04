@@ -70,7 +70,7 @@ impl PartialOrd for PermissionPriv {
 
 impl PermissionPriv {
     /// Check if `self` can be the initial state of a pointer.
-    fn is_initial(&self) -> bool {
+    fn is_initial(self) -> bool {
         matches!(self, Reserved { conflicted: false, .. } | Frozen)
     }
 }
@@ -178,8 +178,13 @@ pub struct PermTransition {
 
 impl Permission {
     /// Check if `self` can be the initial state of a pointer.
-    pub fn is_initial(&self) -> bool {
+    pub fn is_initial(self) -> bool {
         self.inner.is_initial()
+    }
+
+    /// See `<LocStateProt as Exhaustive>::exhaustive()` in `tree::tests`
+    pub fn is_writable_never_written(self) -> bool {
+        matches!(self.inner, Reserved { conflicted: false, .. })
     }
 
     /// Default initial permission of the root of a new tree.
@@ -451,7 +456,10 @@ impl Permission {
 #[cfg(test)]
 mod propagation_optimization_checks {
     pub use super::*;
-    use crate::borrow_tracker::tree_borrows::exhaustive::{precondition, Exhaustive};
+    use crate::borrow_tracker::{
+        tree_borrows::exhaustive::{precondition, Exhaustive},
+        ProtectorKind,
+    };
 
     impl Exhaustive for PermissionPriv {
         fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
@@ -481,6 +489,13 @@ mod propagation_optimization_checks {
         fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
             use AccessRelatedness::*;
             Box::new(vec![This, StrictChildAccess, AncestorAccess, DistantAccess].into_iter())
+        }
+    }
+
+    impl Exhaustive for ProtectorKind {
+        fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
+            use ProtectorKind::*;
+            Box::new(vec![Own, SharedOwn, SharedRef, MutRef].into_iter())
         }
     }
 

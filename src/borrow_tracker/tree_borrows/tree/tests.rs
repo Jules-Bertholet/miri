@@ -8,9 +8,11 @@ use std::fmt;
 impl Exhaustive for LocationState {
     fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
         // We keep `latest_foreign_access` at `None` as that's just a cache.
-        Box::new(<(Permission, bool)>::exhaustive().map(|(permission, initialized)| {
-            Self { permission, initialized, latest_foreign_access: None }
-        }))
+        Box::new(<(Permission, Option<AccessKind>)>::exhaustive().map(
+            |(permission, initialized)| {
+                Self { permission, initialized, latest_foreign_access: None }
+            },
+        ))
     }
 }
 
@@ -28,7 +30,7 @@ fn all_read_accesses_commute() {
     for [rel1, rel2] in <[AccessRelatedness; 2]>::exhaustive() {
         // Any protector state works, but we can't move reads across function boundaries
         // so the two read accesses occur under the same protector.
-        for protected in bool::exhaustive() {
+        for protected in Option::<ProtectorKind>::exhaustive() {
             for loc in LocationState::exhaustive() {
                 // Apply 1 then 2. Failure here means that there is UB in the source
                 // and we skip the check in the target.
@@ -61,30 +63,32 @@ fn protected_enforces_noalias() {
         // We want to check pairs of accesses where one is foreign and one is not.
         precondition!(rel1.is_foreign() != rel2.is_foreign());
         for [kind1, kind2] in <[AccessKind; 2]>::exhaustive() {
-            for mut state in LocationState::exhaustive() {
-                let protected = true;
-                precondition!(state.perform_access(kind1, rel1, protected).is_ok());
-                precondition!(state.perform_access(kind2, rel2, protected).is_ok());
-                // If these were both allowed, it must have been two reads.
-                assert!(
-                    kind1 == AccessKind::Read && kind2 == AccessKind::Read,
-                    "failed to enforce noalias between two accesses that are not both reads"
-                );
+            for [protector1, protector2] in  <[ProtectorKind; 2]>::exhaustive() {
+                for mut state in LocationState::exhaustive() {
+                    precondition!(state.perform_access(kind1, rel1, Some(protector1)).is_ok());
+                    precondition!(state.perform_access(kind2, rel2, Some(protector2)).is_ok());
+                    // If these were both allowed, it must have been two reads.
+                    assert!(
+                        kind1 == AccessKind::Read && kind2 == AccessKind::Read,
+                        "failed to enforce noalias between two accesses that are not both reads"
+                    );
+                }
             }
         }
     }
 }
 
 /// We are going to exhaustively test the possibily of inserting
-/// a spurious read in some code.
+/// a spurious access in some code.
 ///
-/// We choose some pointer `x` through which we want a spurious read to be inserted.
+/// We choose some pointer `x` through which we want a spurious access to be inserted.
 /// `x` must thus be reborrowed, not have any children, and initially start protected.
 ///
-/// To check if inserting a spurious read is possible, we observe the behavior
+/// To check if inserting a spurious acccess is possible, we observe the behavior
 /// of some pointer `y` different from `x` (possibly from a different thread, thus
 /// the protectors on `x` and `y` are not necessarily well-nested).
-/// It must be the case that no matter the context, the insertion of a spurious read
+/// It must be the case that no matter the context, the insertion of a spurious access
+/// (write if the protector is mutable, read if it is not)
 /// through `x` does not introduce UB in code that did not already have UB.
 ///
 /// Testing this will need some setup to simulate the evolution of the permissions
@@ -103,16 +107,16 @@ fn protected_enforces_noalias() {
 ///                           read/write x/y/other
 ///                        or retag y
 ///                        or unprotect y
-///     <spurious read x>      ||
+///     <spurious access x>    ||
 ///                      arbitrary code
 ///                           read/write x/y/other
 ///                        or retag y
 ///                        or unprotect y
 ///                        or unprotect x
 ///
-/// `x` must still be protected at the moment the spurious read is inserted
-/// because spurious reads are impossible in general on unprotected tags.
-mod spurious_read {
+/// `x` must still be protected at the moment the spurious access is inserted
+/// because spurious accesses are impossible in general on unprotected tags.
+mod spurious_access {
     use super::*;
 
     /// Accessed pointer.
@@ -288,7 +292,7 @@ mod spurious_read {
     /// out of sync.
     struct LocStateProt {
         state: LocationState,
-        prot: bool,
+        prot: Option<ProtectorKind>,
     }
 
     impl LocStateProt {
@@ -303,26 +307,38 @@ mod spurious_read {
         }
 
         /// Remove the protector.
-        /// This does not perform the implicit read on function exit because
+        /// This does not perform the implicit access on function exit because
         /// `LocStateProt` does not have enough context to apply its effect.
         fn end_protector(&self) -> Self {
-            Self { prot: false, state: self.state }
+            Self { prot: None, state: self.state }
         }
     }
 
     impl Exhaustive for LocStateProt {
         fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
-            Box::new(
-                <(LocationState, bool)>::exhaustive().map(|(state, prot)| Self { state, prot }),
-            )
+            Box::new(<(LocationState, Option<ProtectorKind>)>::exhaustive().filter_map(
+                |(state, prot)|
+                    // It should be impossible to create a mutably-protected write-initialized `Reserved`
+                    // (as applying the protector immediately makes it `Active`)
+                    // but were such an impossiblity to occur, UB would not immediately
+                    // result according to the other rules.
+                    // So we need to specifically filter out that case.
+                    if state.permission().is_writable_never_written()
+                      && prot.is_some_and(|p| p.access_kind() == AccessKind::Write)
+                      && state.initialized == Some(AccessKind::Write) {
+                        None
+                    } else {
+                        Some( Self { state, prot })
+                    },
+            ))
         }
     }
 
     impl fmt::Display for LocStateProt {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", self.state)?;
-            if self.prot {
-                write!(f, ", protect")?;
+            if let Some(prot) = self.prot {
+                write!(f, ", protect({prot:?})")?;
             }
             Ok(())
         }
@@ -354,41 +370,67 @@ mod spurious_read {
         }
 
         /// Perform a read on the given pointer if its state is `initialized`.
-        /// Must be called just after reborrowing a pointer, and just after
-        /// removing a protector.
-        fn read_if_initialized(self, ptr: PtrSelector) -> Result<Self, ()> {
-            let initialized = match ptr {
-                PtrSelector::X => self.x.state.initialized,
-                PtrSelector::Y => self.y.state.initialized,
+        /// Must be called just after reborrowing a pointer
+        fn reborrow_access(self, ptr: PtrSelector) -> Result<Self, ()> {
+            let lsp = match ptr {
+                PtrSelector::X => &self.x,
+                PtrSelector::Y => &self.y,
                 PtrSelector::Other =>
                     panic!(
-                        "the `initialized` status of `PtrSelector::Other` is unknown, do not pass it to `read_if_initialized`"
+                        "the `initialized` status of `PtrSelector::Other` is unknown, do not pass it to `reborrow_access`"
                     ),
             };
-            if initialized {
-                self.perform_test_access(&TestAccess { ptr, kind: AccessKind::Read })
+            if let Some(maybe_prot) = lsp.state.initialized.is_some().then_some(lsp.prot) {
+                let access_kind = maybe_prot.map_or(AccessKind::Read, ProtectorKind::access_kind);
+
+                self.perform_test_access(&TestAccess { ptr, kind: access_kind })
             } else {
                 Ok(self)
             }
         }
 
-        /// Remove the protector of `x`, including the implicit read on function exit.
-        fn end_protector_x(self) -> Result<Self, ()> {
-            let x = self.x.end_protector();
-            Self { x, ..self }.read_if_initialized(PtrSelector::X)
+        /// Must be called just before removing a protector
+        fn end_protector_access(self, ptr: PtrSelector) -> Result<Self, ()> {
+            let lsp = match ptr {
+                PtrSelector::X => &self.x,
+                PtrSelector::Y => &self.y,
+                PtrSelector::Other =>
+                    panic!(
+                        "the `initialized` status of `PtrSelector::Other` is unknown, do not pass it to `end_protector_access`"
+                    ),
+            };
+            if let (Some(initialized_kind), Some(protector_kind)) =
+                (lsp.state.initialized, lsp.prot)
+            {
+                let access_kind = cmp::min(initialized_kind, protector_kind.access_kind());
+
+                self.perform_test_access(&TestAccess { ptr, kind: access_kind })
+            } else {
+                Ok(self)
+            }
         }
 
-        /// Remove the protector of `y`, including the implicit read on function exit.
-        fn end_protector_y(self) -> Result<Self, ()> {
-            let y = self.y.end_protector();
-            Self { y, ..self }.read_if_initialized(PtrSelector::Y)
+        /// Remove the protector of `x`, including the implicit access on function exit.
+        fn end_protector_x(mut self) -> Result<Self, ()> {
+            self = self.end_protector_access(PtrSelector::X)?;
+
+            self.x = self.x.end_protector();
+            Ok(self)
+        }
+
+        /// Remove the protector of `y`, including the implicit access on function exit.
+        fn end_protector_y(mut self) -> Result<Self, ()> {
+            self = self.end_protector_access(PtrSelector::Y)?;
+
+            self.y = self.y.end_protector();
+            Ok(self)
         }
 
         fn retag_y(self, new_y: LocStateProt) -> Result<Self, ()> {
             assert!(new_y.is_initial());
             // `xy_rel` changes to "mutually foreign" now: `y` can no longer be a parent of `x`.
             Self { y: new_y, xy_rel: RelPosXY::MutuallyForeign, ..self }
-                .read_if_initialized(PtrSelector::Y)
+                .reborrow_access(PtrSelector::Y)
         }
 
         fn perform_test_event<RetX, RetY>(self, evt: &TestEvent<RetX, RetY>) -> Result<Self, ()> {
@@ -483,7 +525,7 @@ mod spurious_read {
         /// that causes UB in the target but not in the source.
         /// This implementation simply explores the reachable space
         /// by all sequences of `TestEvent`.
-        /// This function can be instanciated with `RetX` and `RetY`
+        /// This function can be instantiated with `RetX` and `RetY`
         /// among `NoRet` or `AllowRet` to resp. forbid/allow `x`/`y` to lose their
         /// protector.
         fn distinguishable<RetX, RetY>(&self, other: &Self) -> bool
@@ -500,7 +542,10 @@ mod spurious_read {
                 for evt in <TestEvent<RetX, RetY>>::exhaustive() {
                     // Generate successor states through events (accesses and protector ends)
                     let Ok(new_source) = source.clone().perform_test_event(&evt) else { continue; };
-                    let Ok(new_target) = target.clone().perform_test_event(&evt) else { return true; };
+                    let Ok(new_target) = target.clone().perform_test_event(&evt) else {
+                        eprintln!("  states '{source}' and '{target}' are distinguishable after '{evt}' (→ '{new_source}', UB)");
+                        return true;
+                    };
                     if new_source == new_target { continue; }
                     states.push((new_source, new_target));
                 }
@@ -516,19 +561,22 @@ mod spurious_read {
         let source = LocStateProtPair {
             xy_rel: RelPosXY::MutuallyForeign,
             x: LocStateProt {
-                state: LocationState::new(Permission::new_frozen()).with_access(),
-                prot: true,
+                state: LocationState::new(Permission::new_frozen()).with_access(AccessKind::Read),
+                prot: Some(ProtectorKind::SharedRef),
             },
             y: LocStateProt {
                 state: LocationState::new(Permission::new_reserved(false)),
-                prot: true,
+                prot: Some(ProtectorKind::SharedRef),
             },
         };
         let acc = TestAccess { ptr: PtrSelector::X, kind: AccessKind::Read };
         let target = source.clone().perform_test_access(&acc).unwrap();
         assert!(source.y.state.permission.is_reserved_with_conflicted(false));
         assert!(target.y.state.permission.is_reserved_with_conflicted(true));
-        assert!(!source.distinguishable::<(), ()>(&target))
+        assert!(
+            !source.distinguishable::<(), ()>(&target),
+            "'{source}' is distinguishable from '{target}'"
+        )
     }
 
     #[derive(Clone, Debug)]
@@ -547,9 +595,9 @@ mod spurious_read {
         /// This state might be reset during the execution if the opaque code
         /// contains any `retag y`, but only to an initial state this time.
         y_current_perm: LocationState,
-        /// Whether `y` starts with a protector.
+        /// The protector that `y` starts with.
         /// Might change if the opaque code contains any `ret y`.
-        y_protected: bool,
+        y_protected: Option<ProtectorKind>,
     }
 
     impl Exhaustive for Pattern {
@@ -558,11 +606,11 @@ mod spurious_read {
             for xy_rel in RelPosXY::exhaustive() {
                 for (x_retag_perm, y_current_perm) in <(LocationState, LocationState)>::exhaustive()
                 {
-                    // We can only do spurious reads for initialized locations anyway.
-                    precondition!(x_retag_perm.initialized);
+                    // We can only do spurious accesses for initialized locations anyway.
+                    precondition!(x_retag_perm.initialized.is_some());
                     // And `x` just got retagged, so it must be initial.
                     precondition!(x_retag_perm.permission.is_initial());
-                    for y_protected in bool::exhaustive() {
+                    for y_protected in Option::<ProtectorKind>::exhaustive() {
                         v.push(Pattern { xy_rel, x_retag_perm, y_current_perm, y_protected });
                     }
                 }
@@ -574,11 +622,11 @@ mod spurious_read {
     impl fmt::Display for Pattern {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             let (x, y) = self.retag_permissions();
-            write!(f, "{}; ", self.xy_rel)?;
-            write!(f, "y: ({}); ", y,)?;
-            write!(f, "retag x ({}); ", x)?;
-
-            write!(f, "<arbitrary code>; <spurious read x>;")?;
+            write!(
+                f,
+                "{}; y: ({y}); retag x ({x}); <arbitrary code>; <spurious access x>;",
+                self.xy_rel
+            )?;
             Ok(())
         }
     }
@@ -588,7 +636,7 @@ mod spurious_read {
         /// will retag `x` with.
         /// This does not yet include a possible read-on-reborrow through `x`.
         fn retag_permissions(&self) -> (LocStateProt, LocStateProt) {
-            let x = LocStateProt { state: self.x_retag_perm, prot: true };
+            let x = LocStateProt { state: self.x_retag_perm, prot: Some(ProtectorKind::SharedRef) };
             let y = LocStateProt { state: self.y_current_perm, prot: self.y_protected };
             (x, y)
         }
@@ -598,13 +646,13 @@ mod spurious_read {
         fn initial_state(&self) -> Result<LocStateProtPair, ()> {
             let (x, y) = self.retag_permissions();
             let state = LocStateProtPair { xy_rel: self.xy_rel, x, y };
-            state.read_if_initialized(PtrSelector::X)
+            state.reborrow_access(PtrSelector::X)
         }
     }
 
     #[test]
     /// For each of the patterns described above, execute it once
-    /// as-is, and once with a spurious read inserted. Report any UB
+    /// as-is, and once with a spurious access inserted. Report any UB
     /// in the target but not in the source.
     fn test_all_patterns() {
         let mut ok = 0;
@@ -615,17 +663,20 @@ mod spurious_read {
                 continue;
             };
             // `x` must stay protected, but the function protecting `y` might return here
-            for (final_source, opaque) in
-                initial_source.all_states_reachable_via_opaque_code::</*X*/ NoRet, /*Y*/ AllowRet>()
+            for (final_source, opaque) in initial_source.clone().all_states_reachable_via_opaque_code::</*X*/ NoRet, /*Y*/ AllowRet>()
             {
+                let access_kind = cmp::min(
+                    final_source.x.prot.unwrap().access_kind(),
+                    final_source.x.state.initialized.unwrap(),
+                );
+
                 // Both executions are identical up to here.
                 // Now we do nothing in the source and in the target we do a spurious read.
                 // Then we check if the resulting states are distinguishable.
                 let distinguishable = {
-                    assert!(final_source.x.prot);
-                    let spurious_read = TestAccess { ptr: PtrSelector::X, kind: AccessKind::Read };
+                    let spurious_access = TestAccess { ptr: PtrSelector::X, kind: access_kind };
                     if let Ok(final_target) =
-                        final_source.clone().perform_test_access(&spurious_read)
+                        final_source.clone().perform_test_access(&spurious_access)
                     {
                         // Only after the spurious read has been executed can `x` lose its
                         // protector.
@@ -638,10 +689,10 @@ mod spurious_read {
                 };
                 if let Some(final_target) = distinguishable {
                     eprintln!(
-                        "For pattern '{}', inserting a spurious read through x makes the final state '{}' instead of '{}' which is observable",
-                        pat, final_target, final_source
+                        "For pattern '{pat}', inserting a spurious {access_kind} through x makes the final state '{final_target}' instead of '{final_source}' which is observable",
                     );
-                    eprintln!("  (arbitrary code instanciated with '{}')", opaque);
+                    eprintln!("  (initial state: '{initial_source}')");
+                    eprintln!("  (arbitrary code instantiated with '{opaque}')");
                     err += 1;
                     // We found an instanciation of the opaque code that makes this Pattern
                     // fail, we don't really need to check the rest.

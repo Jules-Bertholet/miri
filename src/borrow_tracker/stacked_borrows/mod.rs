@@ -65,7 +65,7 @@ impl NewPermission {
         kind: RetagKind,
         cx: &crate::MiriInterpCx<'_, 'tcx>,
     ) -> Self {
-        let protector = (kind == RetagKind::FnEntry).then_some(ProtectorKind::StrongProtector);
+        let protector = (kind == RetagKind::FnEntry).then_some(ProtectorKind::SharedRef);
         match ty.kind() {
             ty::Ref(_, pointee, Mutability::Mut) => {
                 if kind == RetagKind::TwoPhase {
@@ -144,7 +144,7 @@ impl NewPermission {
             NewPermission::Uniform {
                 perm: Permission::Unique,
                 access: Some(AccessKind::Write),
-                protector: (kind == RetagKind::FnEntry).then_some(ProtectorKind::WeakProtector),
+                protector: (kind == RetagKind::FnEntry).then_some(ProtectorKind::SharedOwn),
             }
         } else {
             // `!Unpin` boxes do not get `noalias` nor `dereferenceable`.
@@ -259,7 +259,7 @@ impl<'tcx> Stack {
             // The only way this is okay is if the protector is weak and we are deallocating with
             // the right pointer.
             let allowed = matches!(cause, ItemInvalidationCause::Dealloc)
-                && matches!(protector_kind, ProtectorKind::WeakProtector);
+                && matches!(protector_kind, ProtectorKind::SharedOwn);
             if !allowed {
                 return Err(dcx.protector_error(item, protector_kind).into());
             }
@@ -988,7 +988,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         let new_perm = NewPermission::Uniform {
             perm: Permission::Unique,
             access: Some(AccessKind::Write),
-            protector: Some(ProtectorKind::StrongProtector),
+            protector: Some(ProtectorKind::SharedRef),
         };
         this.sb_retag_place(
             place,

@@ -10,7 +10,7 @@
 //!   and the relative position of the access;
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
-use std::fmt;
+use std::{cmp, fmt};
 
 use smallvec::SmallVec;
 
@@ -32,9 +32,10 @@ mod tests;
 /// Data for a single *location*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct LocationState {
-    /// A location is initialized when it is child-accessed for the first time (and the initial
-    /// retag initializes the location for the range covered by the type), and it then stays
-    /// initialized forever.
+    /// A location is initialized with an access kind when it is child-accessed for the first time
+    /// with an access kind at least that strong (writes are stronger than reads, the initial retag
+    /// initializes the location for the range covered by the type). Initialization status never
+    /// transitions from a larger to smaller value.
     /// For initialized locations, "permission" is the current permission. However, for
     /// uninitialized locations, we still need to track the "future initial permission": this will
     /// start out to be `default_initial_perm`, but foreign accesses need to be taken into account.
@@ -42,7 +43,7 @@ pub(super) struct LocationState {
     /// protected, that is *not* the case for uninitialized locations. Instead we just have a latent
     /// "future initial permission" of `Disabled`, causing UB only if an access is ever actually
     /// performed.
-    initialized: bool,
+    initialized: Option<AccessKind>,
     /// This pointer's current permission / future initial permission.
     permission: Permission,
     /// Strongest foreign access whose effects have already been applied to
@@ -58,31 +59,29 @@ impl LocationState {
     /// Default initial state has never been accessed and has been subjected to no
     /// foreign access.
     fn new(permission: Permission) -> Self {
-        Self { permission, initialized: false, latest_foreign_access: None }
+        Self { permission, initialized: None, latest_foreign_access: None }
     }
 
     /// Record that this location was accessed through a child pointer by
     /// marking it as initialized
-    fn with_access(mut self) -> Self {
-        self.initialized = true;
-        self
+    fn with_access(self, access_kind: AccessKind) -> Self {
+        Self { initialized: Some(access_kind), ..self }
     }
 
     /// Check if the location has been initialized, i.e. if it has
     /// ever been accessed through a child pointer.
-    pub fn is_initialized(&self) -> bool {
+    pub fn initialization_status(self) -> Option<AccessKind> {
         self.initialized
     }
 
     /// Check if the state can exist as the initial permission of a pointer.
     ///
-    /// Do not confuse with `is_initialized`, the two are almost orthogonal
-    /// as apart from `Active` which is not initial and must be initialized,
+    /// Do not confuse with `initialization_status`, the two are almost orthogonal
+    /// as apart from `Active` which is not initial and must be write-initialized,
+    /// and `Reserved` which is initial and cannot be write-initialized,
     /// any other permission can have an arbitrary combination of being
     /// initial/initialized.
-    /// FIXME: when the corresponding `assert` in `tree_borrows/mod.rs` finally
-    /// passes and can be uncommented, remove this `#[allow(dead_code)]`.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn is_initial(&self) -> bool {
         self.permission.is_initial()
     }
@@ -99,11 +98,12 @@ impl LocationState {
         &mut self,
         access_kind: AccessKind,
         rel_pos: AccessRelatedness,
-        protected: bool,
+        protected: Option<ProtectorKind>,
     ) -> Result<PermTransition, TransitionError> {
         let old_perm = self.permission;
-        let transition = Permission::perform_access(access_kind, rel_pos, old_perm, protected)
-            .ok_or(TransitionError::ChildAccessForbidden(old_perm))?;
+        let transition =
+            Permission::perform_access(access_kind, rel_pos, old_perm, protected.is_some())
+                .ok_or(TransitionError::ChildAccessForbidden(old_perm))?;
         // Why do only initialized locations cause protector errors?
         // Consider two mutable references `x`, `y` into disjoint parts of
         // the same allocation. A priori, these may actually both be used to
@@ -118,11 +118,13 @@ impl LocationState {
         //
         // See the test `two_mut_protected_same_alloc` in `tests/pass/tree_borrows/tree-borrows.rs`
         // for an example of safe code that would be UB if we forgot to check `self.initialized`.
-        if protected && self.initialized && transition.produces_disabled() {
+        if protected.is_some() && self.initialized.is_some() && transition.produces_disabled() {
             return Err(TransitionError::ProtectedDisabled(old_perm));
         }
         self.permission = transition.applied(old_perm).unwrap();
-        self.initialized |= !rel_pos.is_foreign();
+        if !rel_pos.is_foreign() {
+            self.initialized = cmp::max(self.initialized, Some(access_kind))
+        }
         Ok(transition)
     }
 
@@ -192,10 +194,12 @@ impl LocationState {
 
 impl fmt::Display for LocationState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.initialized {
+            Some(AccessKind::Write) => write!(f, "w")?,
+            Some(AccessKind::Read) => write!(f, "r")?,
+            None => write!(f, "?")?,
+        };
         write!(f, "{}", self.permission)?;
-        if !self.initialized {
-            write!(f, "?")?;
-        }
         Ok(())
     }
 }
@@ -466,7 +470,7 @@ impl Tree {
         };
         let rperms = {
             let mut perms = UniValMap::default();
-            perms.insert(root_idx, LocationState::new(root_perm).with_access());
+            perms.insert(root_idx, LocationState::new(root_perm).with_access(AccessKind::Write));
             RangeMap::new(size, perms)
         };
         Self { root: root_idx, nodes, rperms, tag_mapping }
@@ -482,6 +486,7 @@ impl<'tcx> Tree {
         default_initial_perm: Permission,
         reborrow_range: AllocRange,
         span: Span,
+        access_kind: AccessKind,
     ) -> InterpResult<'tcx> {
         assert!(!self.tag_mapping.contains_key(&new_tag));
         let idx = self.tag_mapping.insert(new_tag);
@@ -500,7 +505,7 @@ impl<'tcx> Tree {
         // Register new_tag as a child of parent_tag
         self.nodes.get_mut(parent_idx).unwrap().children.push(idx);
         // Initialize perms
-        let perm = LocationState::new(default_initial_perm).with_access();
+        let perm = LocationState::new(default_initial_perm).with_access(access_kind);
         for (_perms_range, perms) in self.rperms.iter_mut(reborrow_range.start, reborrow_range.size)
         {
             perms.insert(idx, perm);
@@ -532,8 +537,11 @@ impl<'tcx> Tree {
                     tag,
                     |args: NodeAppArgs<'_>| -> Result<ContinueTraversal, TransitionError> {
                         let NodeAppArgs { node, .. } = args;
-                        if global.borrow().protected_tags.get(&node.tag)
-                            == Some(&ProtectorKind::StrongProtector)
+                        if global
+                            .borrow()
+                            .protected_tags
+                            .get(&node.tag)
+                            .is_some_and(|p| !p.allows_dealloc())
                         {
                             Err(TransitionError::ProtectedDealloc)
                         } else {
@@ -562,6 +570,7 @@ impl<'tcx> Tree {
     /// If `access_range` is `None`, this is interpreted as the special
     /// access that is applied on protector release:
     /// - the access will be applied only to initialized locations of the allocation,
+    ///   with an `AccessKind` no stronger than the initialization status,
     /// - and it will not be visible to children.
     ///
     /// `LocationState::perform_access` will take care of raising transition
@@ -591,19 +600,20 @@ impl<'tcx> Tree {
         // `perms_range` is only for diagnostics (it is the range of
         // the `RangeMap` on which we are currently working).
         let node_app = |perms_range: Range<u64>,
-                        args: NodeAppArgs<'_>|
+                        args: NodeAppArgs<'_>,
+                        acutal_access_kind: AccessKind|
          -> Result<ContinueTraversal, TransitionError> {
             let NodeAppArgs { node, mut perm, rel_pos } = args;
 
             let old_state = perm.or_insert(LocationState::new(node.default_initial_perm));
 
-            match old_state.skip_if_known_noop(access_kind, rel_pos) {
+            match old_state.skip_if_known_noop(acutal_access_kind, rel_pos) {
                 ContinueTraversal::SkipChildren => return Ok(ContinueTraversal::SkipChildren),
                 _ => {}
             }
 
-            let protected = global.borrow().protected_tags.contains_key(&node.tag);
-            let transition = old_state.perform_access(access_kind, rel_pos, protected)?;
+            let protected = global.borrow().protected_tags.get(&node.tag).copied();
+            let transition = old_state.perform_access(acutal_access_kind, rel_pos, protected)?;
 
             // Record the event as part of the history
             if !transition.is_noop() {
@@ -643,7 +653,7 @@ impl<'tcx> Tree {
                 TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                     .traverse_parents_this_children_others(
                         tag,
-                        |args| node_app(perms_range.clone(), args),
+                        |args| node_app(perms_range.clone(), args, access_kind),
                         |args| err_handler(perms_range.clone(), args),
                     )?;
             }
@@ -661,12 +671,18 @@ impl<'tcx> Tree {
                 let idx = self.tag_mapping.get(&tag).unwrap();
                 // Only visit initialized permissions
                 if let Some(p) = perms.get(idx)
-                    && p.initialized
+                    && let Some(initialized_access_kind) = p.initialized
                 {
                     TreeVisitor { nodes: &mut self.nodes, tag_mapping: &self.tag_mapping, perms }
                         .traverse_nonchildren(
                         tag,
-                        |args| node_app(perms_range.clone(), args),
+                        |args| {
+                            node_app(
+                                perms_range.clone(),
+                                args,
+                                cmp::min(initialized_access_kind, access_kind),
+                            )
+                        },
                         |args| err_handler(perms_range.clone(), args),
                     )?;
                 }

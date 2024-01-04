@@ -1,31 +1,31 @@
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1..   2..  10..  11.. 100.. 101..1000..1001..1024
-| Act | Act | Act | Act | Act | Act | Act | Act | Act |    └─┬──<TAG=root of the allocation>
-| Rs  | Act | Rs  | Act | Rs  | Act | Rs  | Act | Rs  |      └─┬──<TAG=data, data>
-|-----| Act |-----|?Dis |-----|?Dis |-----|?Dis |-----|        ├────<TAG=data[1]>
-|-----|-----|-----| Act |-----|?Dis |-----|?Dis |-----|        ├────<TAG=data[10]>
-|-----|-----|-----|-----|-----| Frz |-----|?Dis |-----|        ├────<TAG=data[100]>
-|-----|-----|-----|-----|-----|-----|-----| Act |-----|        └────<TAG=data[1000]>
+|wAct |wAct |wAct |wAct |wAct |wAct |wAct |wAct |wAct |    └─┬──<TAG=root of the allocation>
+|rRs  |wAct |rRs  |wAct |rRs  |wAct |rRs  |wAct |rRs  |      └─┬──<TAG=data, data>
+|-----|wAct |-----|?Dis |-----|?Dis |-----|?Dis |-----|        ├────<TAG=data[1]>
+|-----|-----|-----|wAct |-----|?Dis |-----|?Dis |-----|        ├────<TAG=data[10]>
+|-----|-----|-----|-----|-----|wFrz |-----|?Dis |-----|        ├────<TAG=data[100]>
+|-----|-----|-----|-----|-----|-----|-----|wAct |-----|        └────<TAG=data[1000]>
 ──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 Warning: this tree is indicative only. Some tags may have been hidden.
 0..   1
-| Act |    └─┬──<TAG=root of the allocation>
-| Frz |      └─┬──<TAG=x>
-| Frz |        ├─┬──<TAG=xa>
-| Frz |        │ ├────<TAG=xaa>
-| Frz |        │ └────<TAG=xab>
-| Frz |        ├─┬──<TAG=xb>
-| Frz |        │ └─┬──<TAG=xba>
-| Frz |        │   └─┬──<TAG=xbaa>
-| Frz |        │     └─┬──<TAG=xbaaa>
-| Frz |        │       └────<TAG=xbaaaa>
-| Frz |        └─┬──<TAG=xc>
-| Frz |          ├─┬──<TAG=xca>
-| Frz |          │ ├────<TAG=xcaa>
-| Frz |          │ └────<TAG=xcab>
-| Frz |          └─┬──<TAG=xcb>
-| Frz |            ├────<TAG=xcba>
-| Frz |            └────<TAG=xcbb>
+|wAct |    └─┬──<TAG=root of the allocation>
+|rFrz |      └─┬──<TAG=x>
+|rFrz |        ├─┬──<TAG=xa>
+|rFrz |        │ ├────<TAG=xaa>
+|rFrz |        │ └────<TAG=xab>
+|rFrz |        ├─┬──<TAG=xb>
+|rFrz |        │ └─┬──<TAG=xba>
+|rFrz |        │   └─┬──<TAG=xbaa>
+|rFrz |        │     └─┬──<TAG=xbaaa>
+|rFrz |        │       └────<TAG=xbaaaa>
+|rFrz |        └─┬──<TAG=xc>
+|rFrz |          ├─┬──<TAG=xca>
+|rFrz |          │ ├────<TAG=xcaa>
+|rFrz |          │ └────<TAG=xcab>
+|rFrz |          └─┬──<TAG=xcb>
+|rFrz |            ├────<TAG=xcba>
+|rFrz |            └────<TAG=xcbb>
 ──────────────────────────────────────────────────
